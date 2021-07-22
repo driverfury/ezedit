@@ -6,9 +6,9 @@ This editor utilizes [ez.h library](https://github.com/driverfury/ez).
 
 ## Usage
 
-´´´
+```
 ./ezedit file.txt
-´´´
+```
 
 ## Commands
 

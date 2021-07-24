@@ -1,23 +1,20 @@
 /*
  * TODO:
  *
- * - When searching for a specified string (for example "\n\n" in case '{' and '}'), I need to take
- *   the gap in consideration, I can't do buff.content[pos] == '\n' && buff.content[pos+1] == '\n'
- *   because gap could start at pos+1.
- *   If pos+1 is in gap I should check pos+gap_len.
- * - Check TODO: Should I add '&& !buff_is_gap()'
- *   Maybe if I always set to gap to all zeros I wouldn't have this problem,
- *   but doing that is not a great solution.
- * - ^, $  It's the same code as I and A respectively but I don't need to enter in INSERT mode
- * - s,S,x,X
+ * - Message before exiting unsaved
  * - Ask when closing/opening a new file (if changes have been made)
- * - Do I need ESC instead of Ctrl+Q to go from insert mode to normal mode?
  * - Ctrl+O (Open file)
- * - Indentation level
- * - Syntax highlighting
+ * - You can't do anything in void buffers file (you can't move nor insert)
+ *   Maybe, always add a space character or a new line character??
+ * - Undo, Redo system
  * - Search
  * - Search&Replace
  * - Help page
+ * - What about non-ASCII chars? Check if file is ASCII of utf-8 before opening it
+ *   into the editor?
+ * - Syntax highlighting
+ * - UTF-8 support
+ * - Multi-editor support (split screen)
  *
  */
 
@@ -271,6 +268,8 @@ typedef struct
 editor
 {
     editor_mode mode;
+    int x;
+    int y;
     int cols;
     int rows;
     int cx;
@@ -324,6 +323,50 @@ ed_cursor_move_down(editor *ed)
     {
         ed->rowoffset += ed->cy - (ed->rows - 2);
         ed->cy = ed->rows - 2;
+    }
+}
+
+int
+get_indent_level(gapbuff *buff, int row)
+{
+    int indent;
+    size_t pos;
+
+    indent = 0;
+    if(buff_pos(buff, 0, row, &pos))
+    {
+        while(pos < buff->size && buff->content[pos] == ' ')
+        {
+            ++indent;
+            do
+            {
+                ++pos;
+            }
+            while(buff_is_gap(buff, pos));
+        }
+    }
+
+    return(indent);
+}
+
+void
+insert_new_line(editor *ed, gapbuff *buff)
+{
+    int indent;
+    int i;
+
+    indent = get_indent_level(buff, ed->cy);
+
+    buff_insert(buff, '\n');
+    ed_cursor_move_down(ed);
+    ed->cx = 0;
+
+    for(i = 0;
+        i < indent;
+        ++i)
+    {
+        buff_insert(buff, ' ');
+        ed_cursor_move_right(ed);
     }
 }
 
@@ -516,8 +559,8 @@ screen_refresh(
             x < ed->cols;
             ++x)
         {
-            stdout_buff[(y + EDITOR_START_Y)*ed->cols + x].Attributes = FG_BRIGHT_WHITE|BG_BLACK;
-            stdout_buff[(y + EDITOR_START_Y)*ed->cols + x].Char.AsciiChar = ' ';
+            stdout_buff[(y + ed->y)*ed->cols + (x + ed->x)].Attributes = FG_BRIGHT_WHITE|BG_BLACK;
+            stdout_buff[(y + ed->y)*ed->cols + (x + ed->x)].Char.AsciiChar = ' ';
         }
     }
     x = 0;
@@ -533,20 +576,20 @@ screen_refresh(
             {
                 ++y;
                 x = 0;
-                if(y + EDITOR_START_Y - ed->rowoffset >= ed->rows)
+                if(y + ed->y - ed->rowoffset >= ed->rows)
                 {
                     break;
                 }
                 else if(y - ed->rowoffset >= 0)
                 {
-                    stdout_buff[((y + EDITOR_START_Y)-ed->rowoffset)*ed->cols + 0].Char.AsciiChar = ' ';
+                    stdout_buff[((y + ed->y)-ed->rowoffset)*ed->cols + (0 + ed->x)].Char.AsciiChar = ' ';
                 }
             }
             else
             {
                 if(y >= ed->rowoffset && x >= ed->coloffset && x < ed->coloffset + ed->cols)
                 {
-                    stdout_buff[((y + EDITOR_START_Y)-ed->rowoffset)*ed->cols + (x-ed->coloffset)].Char.AsciiChar = buff->content[i];
+                    stdout_buff[((y + ed->y)-ed->rowoffset)*ed->cols + ((x + ed->x)-ed->coloffset)].Char.AsciiChar = buff->content[i];
                 }
                 ++x;
             }
@@ -556,11 +599,18 @@ screen_refresh(
         y < ed->rows;
         ++y)
     {
-        stdout_buff[(y + EDITOR_START_Y)*ed->cols + 0].Char.AsciiChar = '~';
+        stdout_buff[(y + ed->y)*ed->cols + (0 + ed->x)].Char.AsciiChar = '~';
     }
 
     /* Draw cursor */
-    stdout_buff[(ed->cy + EDITOR_START_Y)*ed->cols + ed->cx].Attributes = BG_BRIGHT_GREEN|FG_BLACK;
+    if(ed->mode == MODE_NORMAL)
+    {
+        stdout_buff[(ed->cy + ed->y)*ed->cols + (ed->cx + ed->x)].Attributes = BG_BRIGHT_GREEN|FG_BLACK;
+    }
+    else
+    {
+        stdout_buff[(ed->cy + ed->y)*ed->cols + (ed->cx + ed->x)].Attributes = BG_RED|FG_BRIGHT_WHITE;
+    }
 
 #if 1
     /* DEBUG: Write gap buffer in text$$$text format */
@@ -601,11 +651,11 @@ screen_refresh(
     }
     if(ed->mode == MODE_INSERT)
     {
-        char *str_mode = "--INSERT-- ";
+        char *str_mode = "--INSERT--";
         size_t str_mode_len = ez_str_len(str_mode);
         y = rows - COMMAND_BAR_HEIGHT + 1;
         for(x = 0;
-            x < (int)ez_max(cols, str_mode_len);
+            x < (int)ez_min(cols, str_mode_len);
             ++x)
         {
             stdout_buff[y*cols + x].Char.AsciiChar = str_mode[x];
@@ -655,6 +705,8 @@ main(void)
         CONSOLE_TEXTMODE_BUFFER, 0);
     cols = sbinfo.srWindow.Right  - sbinfo.srWindow.Left + 1;
     rows = sbinfo.srWindow.Bottom - sbinfo.srWindow.Top + 1;
+    ed.x    = 0;
+    ed.y    = EDITOR_START_Y;
     ed.cols = cols;
     ed.rows = rows - DEBUG_SECTION_HEIGHT - COMMAND_BAR_HEIGHT;
     coord.X = (SHORT)cols;
@@ -765,13 +817,6 @@ main(void)
         char c = 0;
         DWORD num_read = 0;
     
-        /* TODO: TEST: Experimenting, I need to know which one we need */
-#if 0
-        if(!ReadFile(stdin, &c, 1, &num_read, 0))
-        {
-            ExitProcess(99);
-        }
-#else
         INPUT_RECORD input_rec = {0};
         int stop_input_reading = 0;
         do
@@ -802,8 +847,20 @@ main(void)
                 }
                 else
                 {
-                    c = (char)input_rec.Event.KeyEvent.uChar.AsciiChar;
-                    stop_input_reading = 1;
+                    switch(input_rec.Event.KeyEvent.wVirtualKeyCode)
+                    {
+                        case VK_ESCAPE:
+                        {
+                            c = 0x1b;
+                            stop_input_reading = 1;
+                        } break;
+
+                        default:
+                        {
+                            c = (char)input_rec.Event.KeyEvent.uChar.AsciiChar;
+                            stop_input_reading = 1;
+                        } break;
+                    }
                 }
             }
             else if(num_read == 1 &&
@@ -836,7 +893,6 @@ main(void)
             }
         }
         while(!stop_input_reading);
-#endif
 
         /* Process input */
         if(ed.mode == MODE_NORMAL)
@@ -931,6 +987,33 @@ main(void)
                     }
                 } break;
 
+                case 's':
+                {
+                    size_t pos;
+                    if(buff_pos(&buff, ed.cx + ed.coloffset, ed.cy + ed.rowoffset, &pos))
+                    {
+                        buff_move_gap(&buff, pos);
+                        if(buff.gap_end < buff.size)
+                        {
+                            ++buff.gap_end;
+                        }
+                        ed.mode = MODE_INSERT;
+                    }
+                } break;
+
+                case 'x':
+                {
+                    size_t pos;
+                    if(buff_pos(&buff, ed.cx + ed.coloffset, ed.cy + ed.rowoffset, &pos))
+                    {
+                        buff_move_gap(&buff, pos);
+                        if(buff.gap_end < buff.size)
+                        {
+                            ++buff.gap_end;
+                        }
+                    }
+                } break;
+
                 case 'I':
                 {
                     size_t pos;
@@ -938,12 +1021,16 @@ main(void)
                     {
                         ed.coloffset = 0;
                         ed.cx = 0;
-                        /* TODO: Should I add '&& !buff_is_gap()' */
                         while(pos < buff.size &&
                               buff.content[pos] != '\n' &&
                               !ez_char_is_print(buff.content[pos]))
                         {
-                            ++pos;
+                            do
+                            {
+                                ++pos;
+                            }
+                            while(buff_is_gap(&buff, pos));
+
                             if(!buff_is_gap(&buff, pos))
                             {
                                 ed_cursor_move_right(&ed);
@@ -961,10 +1048,14 @@ main(void)
                     {
                         ed.coloffset = 0;
                         ed.cx = 0;
-                        /* TODO: Should I add '&& !buff_is_gap()' */
                         while(pos < buff.size && buff.content[pos] != '\n')
                         {
-                            ++pos;
+                            do
+                            {
+                                ++pos;
+                            }
+                            while(buff_is_gap(&buff, pos));
+
                             if(!buff_is_gap(&buff, pos))
                             {
                                 ed_cursor_move_right(&ed);
@@ -975,6 +1066,71 @@ main(void)
                     }
                 } break;
 
+                case 'S':
+                {
+                    size_t pos;
+                    int indent;
+                    int i;
+
+                    indent = get_indent_level(&buff, ed.cy + ed.rowoffset);
+
+                    if(buff_pos(&buff, 0, ed.cy + ed.rowoffset, &pos))
+                    {
+                        ed.coloffset = 0;
+                        ed.cx = 0;
+                        while(pos < buff.size && buff.content[pos] != '\n')
+                        {
+                            do
+                            {
+                                ++pos;
+                            }
+                            while(buff_is_gap(&buff, pos));
+
+                            if(!buff_is_gap(&buff, pos))
+                            {
+                                ed_cursor_move_right(&ed);
+                            }
+                        }
+                        buff_move_gap(&buff, pos);
+
+                        while(buff.gap_start > 0 &&
+                              buff.content[buff.gap_start-1] != '\n')
+                        {
+                            if(buff.gap_start > 0)
+                            {
+                                --buff.gap_start;
+                                ed_cursor_move_left(&ed);
+                            }
+                        }
+                        for(i = 0;
+                            i < indent;
+                            ++i)
+                        {
+                            buff_insert(&buff, ' ');
+                            ed_cursor_move_right(&ed);
+                        }
+
+                        ed.mode = MODE_INSERT;
+                    }
+                } break;
+
+                case 'X':
+                {
+                    size_t pos;
+                    if(ed.cx + ed.coloffset > 0)
+                    {
+                        if(buff_pos(&buff, ed.cx + ed.coloffset, ed.cy + ed.rowoffset, &pos))
+                        {
+                            buff_move_gap(&buff, pos);
+                            if(buff.gap_start > 0)
+                            {
+                                --buff.gap_start;
+                                ed_cursor_move_left(&ed);
+                            }
+                        }
+                    }
+                } break;
+
                 case 'o':
                 {
                     size_t pos;
@@ -982,19 +1138,21 @@ main(void)
                     {
                         ed.coloffset = 0;
                         ed.cx = 0;
-                        /* TODO: Should I add '&& !buff_is_gap()' */
                         while(pos < buff.size && buff.content[pos] != '\n')
                         {
-                            ++pos;
+                            do
+                            {
+                                ++pos;
+                            }
+                            while(buff_is_gap(&buff, pos));
+
                             if(!buff_is_gap(&buff, pos))
                             {
                                 ed_cursor_move_right(&ed);
                             }
                         }
                         buff_move_gap(&buff, pos);
-                        buff_insert(&buff, '\n');
-                        ed_cursor_move_down(&ed);
-                        ed.cx = 0;
+                        insert_new_line(&ed, &buff);
                         ed.mode = MODE_INSERT;
                     }
                 } break;
@@ -1008,23 +1166,30 @@ main(void)
                         {
                             ed.coloffset = 0;
                             ed.cx = 0;
-                            /* TODO: Should I add '&& !buff_is_gap()' */
                             while(pos < buff.size && buff.content[pos] != '\n')
                             {
-                                ++pos;
+                                do
+                                {
+                                    ++pos;
+                                }
+                                while(buff_is_gap(&buff, pos));
+
                                 if(!buff_is_gap(&buff, pos))
                                 {
                                     ed_cursor_move_right(&ed);
                                 }
                             }
                             buff_move_gap(&buff, pos);
-                            buff_insert(&buff, '\n');
-                            ed.cx = 0;
+                            insert_new_line(&ed, &buff);
+                            ed_cursor_move_up(&ed);
                             ed.mode = MODE_INSERT;
                         }
                     }
                     else
                     {
+                        int indent = get_indent_level(&buff, 0);
+                        int i;
+
                         if(buff_pos(&buff, 0, 0, &pos))
                         {
                             ed.coloffset = 0;
@@ -1032,6 +1197,13 @@ main(void)
                             buff_insert(&buff, '\n');
                             buff_move_gap(&buff, pos);
                             ed.cx = 0;
+                            for(i = 0;
+                                i < indent;
+                                ++i)
+                            {
+                                buff_insert(&buff, ' ');
+                                ed_cursor_move_right(&ed);
+                            }
                             ed.mode = MODE_INSERT;
                         }
                     }
@@ -1043,10 +1215,13 @@ main(void)
                     if(buff_pos(&buff, ed.cx + ed.coloffset, ed.cy + ed.rowoffset, &pos_start))
                     {
                         pos_end = pos_start;
-                        /* TODO: Should I add '&& !buff_is_gap()' */
                         while(pos_end < buff.size && buff.content[pos_end] != '\n')
                         {
-                            ++pos_end;
+                            do
+                            {
+                                ++pos_end;
+                            }
+                            while(buff_is_gap(&buff, pos_end));
                         }
                         buff_move_gap(&buff, pos_end);
                         while(buff.gap_start > pos_start)
@@ -1054,6 +1229,54 @@ main(void)
                             --buff.gap_start;
                         }
                         ed.mode = MODE_INSERT;
+                    }
+                } break;
+
+                case '^':
+                {
+                    size_t pos;
+                    if(buff_pos(&buff, 0, ed.cy + ed.rowoffset, &pos))
+                    {
+                        ed.coloffset = 0;
+                        ed.cx = 0;
+                        while(pos < buff.size &&
+                              buff.content[pos] != '\n' &&
+                              !ez_char_is_print(buff.content[pos]))
+                        {
+                            do
+                            {
+                                ++pos;
+                            }
+                            while(buff_is_gap(&buff, pos));
+
+                            if(!buff_is_gap(&buff, pos))
+                            {
+                                ed_cursor_move_right(&ed);
+                            }
+                        }
+                    }
+                } break;
+
+                case '$':
+                {
+                    size_t pos;
+                    if(buff_pos(&buff, 0, ed.cy + ed.rowoffset, &pos))
+                    {
+                        ed.coloffset = 0;
+                        ed.cx = 0;
+                        while(pos < buff.size && buff.content[pos] != '\n')
+                        {
+                            do
+                            {
+                                ++pos;
+                            }
+                            while(buff_is_gap(&buff, pos));
+
+                            if(!buff_is_gap(&buff, pos))
+                            {
+                                ed_cursor_move_right(&ed);
+                            }
+                        }
                     }
                 } break;
 
@@ -1100,6 +1323,8 @@ main(void)
                 case '}':
                 {
                     size_t pos;
+                    size_t gap_len = buff.gap_end - buff.gap_start;
+                    size_t inc = 1;
                     if(buff_pos(&buff, 0, ed.cy + ed.rowoffset, &pos))
                     {
                         ed.cx = 0;
@@ -1111,9 +1336,13 @@ main(void)
                                 {
                                     ed_cursor_move_down(&ed);
                                 }
+                                if(buff_is_gap(&buff, pos+inc))
+                                {
+                                    inc = gap_len;
+                                }
                                 if(buff.content[pos] == '\n' &&
-                                   buff.content[pos+1] == '\n' &&
-                                   !buff_is_gap(&buff, pos+1))
+                                   buff.content[pos+inc] == '\n' &&
+                                   !buff_is_gap(&buff, pos+inc))
                                 {
                                     break;
                                 }
@@ -1132,6 +1361,8 @@ main(void)
         {
             switch(c)
             {
+                /* Escape (ESC)  & Ctrl+Q */
+                case 0x1b:
                 case CTRL_KEY('q'):
                 {
                     ed_cursor_move_left(&ed);
@@ -1151,8 +1382,15 @@ main(void)
                     ed_cursor_move_right(&ed);
                 } break;
 
-                /* Printable char */
-                case ' ':case '!':case '"':case '#':case '$':case '%':case '&':
+                /* Space */
+                case ' ':
+                {
+                    buff_insert(&buff, c);
+                    ed_cursor_move_right(&ed);
+                } break;
+
+                /* Printable characters (non-whitespace) */
+                case '!':case '"':case '#':case '$':case '%':case '&':
                 case '\'':case '(':case ')':case '*':case '+':case ',':case '-':
                 case '.':case '/':case '0':case '1':case '2':case '3':case '4':
                 case '5':case '6':case '7':case '8':case '9':case ':':case ';':
@@ -1213,9 +1451,7 @@ main(void)
                 /* New line */
                 case '\r':
                 {
-                    buff_insert(&buff, '\n');
-                    ed_cursor_move_down(&ed);
-                    ed.cx = 0;
+                    insert_new_line(&ed, &buff);
                 } break;
 
                 default:

@@ -77,6 +77,7 @@ EZ_SCOPE size_t ez_str_len(char *s);
 EZ_SCOPE size_t ez_str_len_max(char *s, size_t max);
 EZ_SCOPE void   ez_str_copy(char *src, char *dest);
 EZ_SCOPE void   ez_str_copy_max(char *src, char *dest, size_t max);
+EZ_SCOPE int    ez_str_cmp(char *s1, char *s2);
 EZ_SCOPE int    ez_str_decimal(char *s);
 
 /******************************************************************************/
@@ -129,6 +130,7 @@ int _fltused = 0;
  */
 #pragma comment(lib, "kernel32.lib")
 
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 void
@@ -258,6 +260,44 @@ ez_str_copy_max(char *src, char *dest, size_t max)
         *dest++ = *src++;
         ++i;
     }
+}
+
+int
+ez_str_cmp(char *s1, char *s2)
+{
+    size_t len1;
+    size_t len2;
+    size_t len;
+    size_t i;
+
+    len1 = ez_str_len(s1);
+    len2 = ez_str_len(s2);
+
+    len = ez_min(len1, len2);
+    for(i = 0;
+        i < len;
+        ++i)
+    {
+        if(*s1 < *s2)
+        {
+            return(-1);
+        }
+        else if(*s1 > *s2)
+        {
+            return(1);
+        }
+        ++s1;
+        ++s2;
+    }
+    if(len1 < len2)
+    {
+        return(-1);
+    }
+    else if(len1 > len2)
+    {
+        return(1);
+    }
+    return(0);
 }
 
 int

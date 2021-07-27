@@ -1,6 +1,7 @@
 /*
  * TODO:
  *
+ * - Syntax highlighting
  * - Message before exiting unsaved
  * - Ask when closing/opening a new file (if changes have been made)
  * - Ctrl+O (Open file)
@@ -12,7 +13,6 @@
  * - Help page
  * - What about non-ASCII chars? Check if file is ASCII of utf-8 before opening it
  *   into the editor?
- * - Syntax highlighting
  * - UTF-8 support
  * - Multi-editor support (split screen)
  *
@@ -452,6 +452,43 @@ parse_args(int *argc)
     return(argv);
 }
 
+char *keywords[] = {
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while"
+};
+
 HANDLE stdout;
 HANDLE stdin;
 
@@ -463,6 +500,12 @@ screen_refresh(
 {
     int x;
     int y;
+    size_t i;
+    char c;
+    char c2;
+    char buffer[32];
+    size_t keywordIndex;
+    int startx;
 
     /* Draw status bar on top */
     y = 0;
@@ -559,13 +602,13 @@ screen_refresh(
             x < ed->cols;
             ++x)
         {
-            stdout_buff[(y + ed->y)*ed->cols + (x + ed->x)].Attributes = FG_BRIGHT_WHITE|BG_BLACK;
+            stdout_buff[(y + ed->y)*ed->cols + (x + ed->x)].Attributes = FG_WHITE|BG_BLACK;
             stdout_buff[(y + ed->y)*ed->cols + (x + ed->x)].Char.AsciiChar = ' ';
         }
     }
     x = 0;
     y = 0;
-    for(size_t i = 0;
+    for(i = 0;
         i < buff->size;
         ++i)
     {
@@ -602,6 +645,281 @@ screen_refresh(
         stdout_buff[(y + ed->y)*ed->cols + (0 + ed->x)].Char.AsciiChar = '~';
     }
 
+    /* Syntax highlighting */
+    i = 0;
+    x = 0;
+    y = 0;
+    while(i < buff->size)
+    {
+        while(buff_is_gap(buff, i))
+        {
+            ++i;
+        }
+
+        switch(buff->content[i])
+        {
+            case  ' ': case '\r': case '\n':
+            case '\v': case '\t': case '\f':
+            {
+                if(buff->content[i] == '\n' || buff->content[i] == '\r')
+                {
+                    ++y;
+                    x = 0;
+                }
+                else
+                {
+                    ++x;
+                }
+                ++i;
+            } break;
+
+            case ';':
+            case '{': case '}':
+            {
+                if( y - ed->rowoffset >= 0 &&
+                    y - ed->rowoffset < ed->rows &&
+                    x - ed->coloffset >= 0 &&
+                    x - ed->coloffset < ed->cols)
+                {
+                    stdout_buff[
+                        (y - ed->rowoffset + ed->y)*ed->cols +
+                        (x - ed->coloffset + ed->x)].Attributes = FG_CYAN|BG_BLACK;
+                }
+                ++x;
+                ++i;
+            } break;
+
+            /* Number literals */
+            /* NOTE(driverfury): We do only support integer literals */
+            case '0':case '1':case '2':case '3':case'4':
+            case '5':case '6':case '7':case '8':case'9':
+            {
+                startx = x;
+                c = 0;
+                while(ez_char_is_digit(buff->content[i]))
+                {
+                    ++x;
+                    ++i;
+                    ++c;
+                    while(buff_is_gap(buff, i))
+                    {
+                        ++i;
+                    }
+                }
+                for(c2 = 0;
+                    c2 < c;
+                    ++c2)
+                {
+                    if( y - ed->rowoffset >= 0 &&
+                        y - ed->rowoffset < ed->rows &&
+                        startx + c2 - ed->coloffset >= 0 &&
+                        startx + c2 - ed->coloffset < ed->cols)
+                    {
+                        stdout_buff[
+                            (y - ed->rowoffset + ed->y)*ed->cols +
+                            (startx + c2 - ed->coloffset + ed->x)].Attributes = FG_BRIGHT_MAGENTA|BG_BLACK;
+                    }
+                }
+            } break;
+
+            /* Character literals */
+            case '\'':
+            {
+                startx = x;
+                c = 0;
+                do
+                {
+                    ++x;
+                    ++i;
+                    ++c;
+                    while(buff_is_gap(buff, i))
+                    {
+                        ++i;
+                    }
+                    if(buff->content[i] == '\\')
+                    {
+                        ++x;
+                        ++i;
+                        ++c;
+                        while(buff_is_gap(buff, i))
+                        {
+                            ++i;
+                        }
+                    }
+                }
+                while(i < buff->size &&
+                      buff->content[i] != '\'' &&
+                      buff->content[i] != '\n');
+
+                if(buff->content[i] == '\'')
+                {
+                    ++c;
+                    for(c2 = 0;
+                        c2 < c;
+                        ++c2)
+                    {
+                        if( y - ed->rowoffset >= 0 &&
+                            y - ed->rowoffset < ed->rows &&
+                            startx + c2 - ed->coloffset >= 0 &&
+                            startx + c2 - ed->coloffset < ed->cols)
+                        {
+                            stdout_buff[
+                                (y - ed->rowoffset + ed->y)*ed->cols +
+                                (startx + c2 - ed->coloffset + ed->x)].Attributes = FG_BRIGHT_MAGENTA|BG_BLACK;
+                        }
+                    }
+                }
+            } break;
+
+            /* Operators */
+            case '(': case ')':
+            case '[': case ']':
+            case '.': case '=':
+            case '~': case '!':
+            case '&': case '|':
+            case '+': case '-':
+            case '*': case '/':
+            case '<': case '>':
+            case '^': case '%':
+            case '?': case ':':
+            case ',':
+            {
+                c = buff->content[i];
+                if( y - ed->rowoffset >= 0 &&
+                    y - ed->rowoffset < ed->rows &&
+                    x - ed->coloffset >= 0 &&
+                    x - ed->coloffset < ed->cols)
+                {
+                    stdout_buff[
+                        (y - ed->rowoffset + ed->y)*ed->cols +
+                        (x - ed->coloffset + ed->x)].Attributes = FG_GREEN|BG_BLACK;
+                }
+                ++x;
+                ++i;
+                while(buff_is_gap(buff, i))
+                {
+                    ++i;
+                }
+                c2 = buff->content[i];
+                if( (c == '+' && (c2 == '+' || c2 == '=')) ||
+                    (c == '-' && (c2 == '-' || c2 == '=' || c2 == '>')) ||
+                    (c == '*' && c2 == '=') ||
+                    (c == '/' && c2 == '=') ||
+                    (c == '%' && c2 == '=') ||
+                    (c == '<' && (c2 == '<' || c2 == '=')) ||
+                    (c == '>' && (c2 == '>' || c2 == '=')) ||
+                    (c == '=' && c2 == '=') ||
+                    (c == '!' && c2 == '=') ||
+                    (c == '&' && (c2 == '&' || c2 == '=')) ||
+                    (c == '|' && (c2 == '|' || c2 == '=')) ||
+                    (c == '^' && c2 == '='))
+                {
+                    if( y - ed->rowoffset >= 0 &&
+                        y - ed->rowoffset < ed->rows &&
+                        x - ed->coloffset >= 0 &&
+                        x - ed->coloffset < ed->cols)
+                    {
+                        stdout_buff[
+                            (y - ed->rowoffset + ed->y)*ed->cols +
+                            (x - ed->coloffset + ed->x)].Attributes = FG_GREEN|BG_BLACK;
+                    }
+                    ++x;
+                    ++i;
+                    while(buff_is_gap(buff, i))
+                    {
+                        ++i;
+                    }
+
+                    if( (c == '>' && c2 == '>' && buff->content[i] == '=') ||
+                        (c == '<' && c2 == '<' && buff->content[i] == '='))
+                    {
+                        if( y - ed->rowoffset >= 0 &&
+                            y - ed->rowoffset < ed->rows &&
+                            x - ed->coloffset >= 0 &&
+                            x - ed->coloffset < ed->cols)
+                        {
+                            stdout_buff[
+                                (y - ed->rowoffset + ed->y)*ed->cols +
+                                (x - ed->coloffset + ed->x)].Attributes = FG_GREEN|BG_BLACK;
+                        }
+                    }
+                    ++x;
+                    ++i;
+                }
+            } break;
+
+            /* Keywords */
+            case 'a':case 'b':case 'c':case 'd':case 'e':case 'f':case 'g':
+            case 'h':case 'i':case 'j':case 'k':case 'l':case 'm':case 'n':
+            case 'o':case 'p':case 'q':case 'r':case 's':case 't':case 'u':
+            case 'v':case 'w':case 'x':case 'y':case 'z':
+            case 'A':case 'B':case 'C':case 'D':case 'E':case 'F':case 'G':
+            case 'H':case 'I':case 'J':case 'K':case 'L':case 'M':case 'N':
+            case 'O':case 'P':case 'Q':case 'R':case 'S':case 'T':case 'U':
+            case 'V':case 'W':case 'X':case 'Y':case 'Z':
+            {
+                c = 0;
+                startx = x;
+                while(c < ez_array_count(buffer) - 1 &&
+                      ez_char_is_alpha(buff->content[i]))
+                {
+                    buffer[c++] = buff->content[i];
+                    ++x;
+                    ++i;
+                    while(buff_is_gap(buff, i))
+                    {
+                        ++i;
+                    }
+                }
+                buffer[c] = 0;
+                if(!ez_char_is_alpha(buff->content[i]))
+                {
+                    for(keywordIndex = 0;
+                        keywordIndex < ez_array_count(keywords);
+                        ++keywordIndex)
+                    {
+                        if(!ez_str_cmp(buffer, keywords[keywordIndex]))
+                        {
+                            for(c2 = 0;
+                                c2 < c;
+                                ++c2)
+                            {
+                                if( y - ed->rowoffset >= 0 &&
+                                    y - ed->rowoffset < ed->rows &&
+                                    startx + c2 - ed->coloffset >= 0 &&
+                                    startx + c2 - ed->coloffset < ed->cols)
+                                {
+                                    stdout_buff[
+                                        (y - ed->rowoffset + ed->y)*ed->cols +
+                                        (startx + c2 - ed->coloffset + ed->x)].Attributes = FG_YELLOW|BG_BLACK;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                while(ez_char_is_alphanum(buff->content[i]))
+                {
+                    ++x;
+                    ++i;
+                    while(buff_is_gap(buff, i))
+                    {
+                        ++i;
+                    }
+                }
+            } break;
+
+            default:
+            {
+                if(!buff_is_gap(buff, i))
+                {
+                    ++x;
+                }
+                ++i;
+            } break;
+        }
+    }
+
     /* Draw cursor */
     if(ed->mode == MODE_NORMAL)
     {
@@ -615,7 +933,7 @@ screen_refresh(
 #if 1
     /* DEBUG: Write gap buffer in text$$$text format */
     y = (rows - DEBUG_SECTION_HEIGHT - COMMAND_BAR_HEIGHT);
-    for(size_t i = 0;
+    for(i = 0;
         i < buff->size && i < DEBUG_SECTION_HEIGHT*cols;
         ++i)
     {
